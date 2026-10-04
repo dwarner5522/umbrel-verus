@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#3165d4" />
+		<title>Verus Node</title>
+		<link rel="icon" type="image/svg+xml" href="verus-icon-blue.svg" />
+		<link rel="stylesheet" href="style.css" />
+	</head>
+	<body>
+		<header class="masthead">
+			<div class="wrap masthead-inner">
+				<img class="mark" src="verus-icon-white.svg" alt="Verus" width="44" height="44" />
+				<div class="masthead-title">
+					<h1>Verus Node</h1>
+					<p id="version">verusd</p>
+				</div>
+				<span class="pill" id="status-pill" data-state="starting">Starting</span>
+			</div>
+
+			<div class="wrap">
+				<section class="sync" aria-live="polite">
+					<div class="sync-figure">
+						<span id="sync-percent">–</span>
+						<span class="sync-label" id="sync-label">Blockchain sync</span>
+					</div>
+					<div class="sync-detail">
+						<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="sync-bar">
+							<div class="bar-fill" id="sync-fill"></div>
+						</div>
+						<p id="sync-message">Connecting to the node…</p>
+					</div>
+				</section>
+			</div>
+		</header>
+
+		<main class="wrap">
+			<div class="notice" id="error" hidden></div>
+
+			<section class="stats" aria-label="Node statistics">
+				<div class="stat"><span class="stat-title">Connections</span><span class="stat-value" id="stat-peers">–</span><span class="stat-unit">peers</span></div>
+				<div class="stat"><span class="stat-title">Mempool</span><span class="stat-value" id="stat-mempool">–</span><span class="stat-unit">transactions</span></div>
+				<div class="stat"><span class="stat-title">Network hashrate</span><span class="stat-value" id="stat-hashrate">–</span><span class="stat-unit" id="stat-hashrate-unit">H/s</span></div>
+				<div class="stat"><span class="stat-title">Blockchain size</span><span class="stat-value" id="stat-size">–</span><span class="stat-unit" id="stat-size-unit">GB</span></div>
+				<div class="stat"><span class="stat-title">Staking supply</span><span class="stat-value" id="stat-staking">–</span><span class="stat-unit">VRSC</span></div>
+				<div class="stat"><span class="stat-title">Latest block</span><span class="stat-value" id="stat-tip">–</span><span class="stat-unit" id="stat-tip-unit">ago</span></div>
+			</section>
+
+			<div class="columns">
+				<section class="card">
+					<h2>Connect to your node</h2>
+					<p class="hint">Use these details to connect wallets, miners and other software on your network to this node's RPC and P2P ports.</p>
+					<dl class="details">
+						<div><dt>RPC host</dt><dd><code id="rpc-host">–</code><button class="copy" data-copy="rpc-host">Copy</button></dd></div>
+						<div><dt>RPC port</dt><dd><code id="rpc-port">–</code><button class="copy" data-copy="rpc-port">Copy</button></dd></div>
+						<div><dt>RPC username</dt><dd><code id="rpc-user">–</code><button class="copy" data-copy="rpc-user">Copy</button></dd></div>
+						<div>
+							<dt>RPC password</dt>
+							<dd><code id="rpc-pass" class="secret">••••••••••••</code><button class="copy" id="reveal">Show</button><button class="copy" data-copy="rpc-pass">Copy</button></dd>
+						</div>
+						<div><dt>P2P port</dt><dd><code id="p2p-port">–</code><button class="copy" data-copy="p2p-port">Copy</button></dd></div>
+					</dl>
+				</section>
+
+				<section class="card">
+					<h2>Faster first sync</h2>
+					<p class="hint">
+						Verifying the whole chain from the first block can take days. A bootstrap downloads a recent copy of the blockchain published by the Verus project (about 25 GB) and continues syncing from there.
+					</p>
+					<p class="hint">This replaces any blockchain data already downloaded. Your wallet is not touched.</p>
+					<button class="button" id="bootstrap">Sync from bootstrap</button>
+					<p class="hint" id="bootstrap-result" hidden></p>
+				</section>
+			</div>
+
+			<section class="card">
+				<h2>Peers <span class="count" id="peer-count"></span></h2>
+				<div class="table-scroll">
+					<table>
+						<thead>
+							<tr><th>Address</th><th>Client</th><th>Direction</th><th class="num">Height</th><th class="num">Ping</th></tr>
+						</thead>
+						<tbody id="peers"><tr><td colspan="5" class="empty">No peers connected yet</td></tr></tbody>
+					</table>
+				</div>
+			</section>
+
+			<section class="card">
+				<details id="log-details">
+					<summary><h2>Node log</h2></summary>
+					<pre id="log">Loading…</pre>
+				</details>
+			</section>
+		</main>
+
+		<footer class="wrap footer">Truth and privacy for all · <a href="https://verus.io" target="_blank" rel="noreferrer">verus.io</a></footer>
+
+		<script src="app.js"></script>
+	</body>
+</html>
