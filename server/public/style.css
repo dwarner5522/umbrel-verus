@@ -293,10 +293,12 @@ pre {
 	font-size: 13px;
 }
 
+/* Long values such as the RPC password wrap instead of being cut off. */
 dd code {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	min-width: 0;
+	text-align: right;
+	overflow-wrap: anywhere;
+	user-select: all;
 }
 
 .copy,

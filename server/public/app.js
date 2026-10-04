@@ -183,15 +183,35 @@ $('reveal').addEventListener('click', () => {
 	$('reveal').textContent = revealed ? 'Hide' : 'Show'
 })
 
+async function copyText(text) {
+	try {
+		await navigator.clipboard.writeText(text)
+		return true
+	} catch {
+		// The Clipboard API only exists in secure contexts, and Umbrel is usually opened over plain http.
+		const field = document.createElement('textarea')
+		field.value = text
+		field.setAttribute('readonly', '')
+		field.style.cssText = 'position:fixed;top:0;left:0;opacity:0'
+		document.body.append(field)
+		field.select()
+		let copied = false
+		try {
+			copied = document.execCommand('copy')
+		} catch {}
+		field.remove()
+		return copied
+	}
+}
+
 for (const button of document.querySelectorAll('[data-copy]')) {
 	button.addEventListener('click', async () => {
 		const id = button.dataset.copy
 		const text = id === 'rpc-pass' ? password : $(id).textContent
-		try {
-			await navigator.clipboard.writeText(text)
+		if (await copyText(text)) {
 			button.textContent = 'Copied'
-		} catch {
-			// Clipboard API needs a secure context; over plain http, reveal the value so it can be selected.
+		} else {
+			// Last resort: reveal the value so it can be selected by hand.
 			if (id === 'rpc-pass' && !revealed) $('reveal').click()
 			button.textContent = 'Select to copy'
 		}
