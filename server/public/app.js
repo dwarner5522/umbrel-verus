@@ -129,6 +129,37 @@ function renderWaiting(status) {
 	$('sync-message').textContent = status.message || ''
 }
 
+function renderElectrum(electrum) {
+	$('electrum').hidden = !electrum
+	if (!electrum) return
+
+	const ready = electrum.phase === 'ready'
+	const known = electrum.dbHeight != null
+	// Never show 100% until wallets can actually connect.
+	const percent = ready ? 100 : Math.min(Math.floor((electrum.progress || 0) * 1000) / 10, 99.9)
+	const labels = {ready: 'Ready for wallets', syncing: `Indexing ${percent}%`, offline: 'Offline', stopped: 'Stopped'}
+	$('electrum-state').textContent = `· ${labels[electrum.phase] || 'Starting'}`
+	$('electrum-fill').style.width = `${known ? percent : 0}%`
+	$('electrum-bar').setAttribute('aria-valuenow', known ? percent : 0)
+
+	const host = electrum.host || location.hostname
+	$('electrum-host').textContent = host
+	$('electrum-port').textContent = electrum.port ?? '–'
+	$('electrum-protocol').textContent = (electrum.protocol || 'tcp').toUpperCase()
+	$('electrum-server').textContent = electrum.port ? `${host}:${electrum.port}:${electrum.protocol || 'tcp'}` : '–'
+	$('electrum-height').textContent =
+		known && electrum.daemonHeight > 0 ? `${number.format(electrum.dbHeight)} of ${number.format(electrum.daemonHeight)} blocks` : '–'
+	$('electrum-sessions').textContent = known ? number.format(electrum.sessions) : '–'
+
+	$('electrum-hint').textContent =
+		electrum.error ||
+		(ready
+			? 'Ready. In Verus Desktop or another lite wallet, add the server address below as a custom Electrum server for VRSC.'
+			: electrum.phase === 'syncing'
+				? 'Indexing the blockchain from your node. The first index takes several hours; wallets can connect once it has caught up.'
+				: electrum.message || 'Starting…')
+}
+
 async function refresh() {
 	try {
 		const response = await fetch('api/status', {cache: 'no-store'})
@@ -138,6 +169,7 @@ async function refresh() {
 		if (status.node) renderNode(status.node)
 		else renderWaiting(status)
 		renderPeers(status.peers || [])
+		renderElectrum(status.electrum)
 
 		const error = status.error || status.node?.warnings
 		$('error').hidden = !error
@@ -156,6 +188,19 @@ async function refreshLog() {
 	try {
 		const {lines} = await (await fetch('api/logs', {cache: 'no-store'})).json()
 		const log = $('log')
+		const pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 24
+		log.textContent = lines.length ? lines.join('\n') : 'The log is empty.'
+		if (pinned) log.scrollTop = log.scrollHeight
+	} catch {
+		// keep showing the last log we had
+	}
+}
+
+async function refreshElectrumLog() {
+	if (!$('electrum-log-details').open) return
+	try {
+		const {lines} = await (await fetch('api/electrum/logs', {cache: 'no-store'})).json()
+		const log = $('electrum-log')
 		const pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 24
 		log.textContent = lines.length ? lines.join('\n') : 'The log is empty.'
 		if (pinned) log.scrollTop = log.scrollHeight
@@ -234,8 +279,10 @@ $('bootstrap').addEventListener('click', async () => {
 })
 
 $('log-details').addEventListener('toggle', refreshLog)
+$('electrum-log-details').addEventListener('toggle', refreshElectrumLog)
 
 loadConnect()
 refresh()
 setInterval(refresh, 3000)
 setInterval(refreshLog, 5000)
+setInterval(refreshElectrumLog, 5000)

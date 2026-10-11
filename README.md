@@ -7,7 +7,7 @@ Docker image for the **Verus Node** umbrelOS app: the official Verus daemon (`ve
 - `server/public/` is the dashboard UI.
 - `icon.svg` is the Umbrel app icon.
 
-The Umbrel package that uses this image lives in `umbrel-apps/verus`.
+The Umbrel package that uses this image is `dwarner-verus` in [umbrel-verus-app-store](https://github.com/dwarner5522/umbrel-verus-app-store), where it runs next to the Electrum server image as one app.
 
 ## Configuration
 
@@ -20,6 +20,7 @@ The Umbrel package that uses this image lives in `umbrel-apps/verus`.
 | `APPS_SUBNET` | none | extra `rpcallowip` range, e.g. `10.21.0.0/16` |
 | `VERUSD_EXTRA_ARGS` | none | comma-delimited extra `verusd` flags |
 | `DEVICE_DOMAIN_NAME` | none | hostname shown in the connect details |
+| `ELECTRUM_STATUS_URL` | none | status page of an [umbrel-verus-electrum](https://github.com/dwarner5522/umbrel-verus-electrum) container, e.g. `http://electrum:3000`. When set, the dashboard also shows the Electrum server and serves its widget at `/api/widget/electrum` |
 | `PORT` | `3000` | dashboard port |
 
 All state lives in `/data`: `/data/.komodo/VRSC` (blockchain, `wallet.dat`, `VRSC.conf`) and `/data/.zcash-params`.
@@ -35,7 +36,7 @@ Then open http://localhost:3000.
 
 ## Publish
 
-Pushing a `v*` tag runs `.github/workflows/build.yml`, which builds `linux/amd64` and `linux/arm64` and pushes `ghcr.io/<owner>/umbrel-verus:<tag>`. The workflow summary prints the full `image:tag@sha256:digest` reference to paste into `umbrel-apps/verus/docker-compose.yml`. Make the package public in GitHub's package settings so Umbrel can pull it.
+Pushing a `v*` tag runs `.github/workflows/build.yml`, which builds `linux/amd64` and `linux/arm64` and pushes `ghcr.io/<owner>/umbrel-verus:<tag>`. The workflow summary prints the full `image:tag@sha256:digest` reference to paste into `dwarner-verus/docker-compose.yml` in the app store. Make the package public in GitHub's package settings so Umbrel can pull it.
 
 ```sh
 git tag v1.2.18 && git push origin v1.2.18

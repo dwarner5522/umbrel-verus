@@ -25,6 +25,8 @@ const config = {
 	appsSubnet: process.env.APPS_SUBNET || '',
 	extraArgs: (process.env.VERUSD_EXTRA_ARGS || '').split(',').map((arg) => arg.trim()).filter(Boolean),
 	deviceDomainName: process.env.DEVICE_DOMAIN_NAME || '',
+	// Status page of the Electrum server container that ships in the same Umbrel app, if any.
+	electrumUrl: (process.env.ELECTRUM_STATUS_URL || '').replace(/\/+$/, ''),
 }
 
 // Same files and hashes as the fetch-params script shipped with the Verus CLI.
@@ -51,6 +53,8 @@ const state = {
 	rpcStatus: null,
 	node: null,
 	peers: [],
+	// null when this image runs without an Electrum server next to it
+	electrum: null,
 	updatedAt: null,
 }
 
@@ -59,6 +63,7 @@ let shuttingDown = false
 let restartTimer = null
 let restartNow = false
 let pollTimer = null
+let electrumTimer = null
 
 const log = (...args) => console.log(new Date().toISOString(), ...args)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -352,6 +357,44 @@ async function poll() {
 }
 
 // ---------------------------------------------------------------------------
+// Electrum server
+
+async function electrumFetch(pathname) {
+	const response = await fetch(`${config.electrumUrl}${pathname}`, {signal: AbortSignal.timeout(5000)})
+	if (!response.ok) throw new Error(`HTTP ${response.status}`)
+	return response.json()
+}
+
+async function pollElectrum() {
+	try {
+		const status = await electrumFetch('/api/status')
+		state.electrum = {
+			phase: status.phase,
+			message: status.message,
+			error: status.error,
+			dbHeight: status.dbHeight,
+			daemonHeight: status.daemonHeight,
+			progress: status.progress,
+			sessions: status.sessions,
+			version: status.version,
+			host: status.connect?.host || config.deviceDomainName,
+			port: status.connect?.port,
+			protocol: status.connect?.protocol || 'tcp',
+		}
+	} catch {
+		state.electrum = {phase: 'offline', message: 'The Electrum server is not running.'}
+	}
+}
+
+async function widgetElectrum() {
+	try {
+		return await electrumFetch('/api/widget/sync')
+	} catch {
+		return {type: 'text-with-progress', refresh: '5s', link: '', title: 'Electrum server', text: '-', progressLabel: 'Offline', progress: 0}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HTTP
 
 const PUBLIC_DIR = path.join(__dirname, 'public')
@@ -494,6 +537,12 @@ const server = http.createServer(async (request, response) => {
 			if (pathname === '/api/logs') return sendJson(response, 200, {lines: await tailLog()})
 			if (pathname === '/api/widget/stats') return sendJson(response, 200, widgetStats())
 			if (pathname === '/api/widget/sync') return sendJson(response, 200, widgetSync())
+			if (config.electrumUrl) {
+				if (pathname === '/api/widget/electrum') return sendJson(response, 200, await widgetElectrum())
+				if (pathname === '/api/electrum/logs') {
+					return sendJson(response, 200, await electrumFetch('/api/logs').catch(() => ({lines: []})))
+				}
+			}
 			if (pathname.startsWith('/api/')) return sendJson(response, 404, {error: 'Not found'})
 			return await sendStatic(response, pathname)
 		}
@@ -523,6 +572,7 @@ async function shutdown(signal) {
 	state.message = 'Shutting down…'
 	clearTimeout(restartTimer)
 	clearInterval(pollTimer)
+	clearInterval(electrumTimer)
 	server.close()
 	server.closeAllConnections?.()
 	await stopDaemon()
@@ -538,6 +588,10 @@ async function main() {
 		process.exit(1)
 	}
 	server.listen(config.httpPort, () => log(`Dashboard listening on :${config.httpPort}`))
+	if (config.electrumUrl) {
+		pollElectrum()
+		electrumTimer = setInterval(pollElectrum, POLL_INTERVAL_MS)
+	}
 	await ensureParams()
 	if (shuttingDown) return
 	await startDaemon()

@@ -173,6 +173,14 @@ h1 {
 	background: #fff;
 	transition: width 0.6s ease;
 }
+/* the same bar on a card instead of the blue masthead */
+.bar-card {
+	margin: 14px 0 6px;
+	background: color-mix(in srgb, var(--blue) 18%, transparent);
+}
+.bar-card .bar-fill {
+	background: var(--blue);
+}
 
 /* Content -------------------------------------------------------------- */
 
@@ -477,4 +485,8 @@ pre {
 		animation: none !important;
 		transition: none !important;
 	}
+}
+
+#electrum details {
+	margin-top: 18px;
 }

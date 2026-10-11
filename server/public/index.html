@@ -74,6 +74,27 @@
 				</section>
 			</div>
 
+			<section class="card" id="electrum" hidden>
+				<h2>Electrum server <span class="count" id="electrum-state"></span></h2>
+				<p class="hint" id="electrum-hint">Lite wallets such as Verus Desktop can use this server instead of a public one, so your addresses and balances are only looked up on your own node.</p>
+				<div class="bar bar-card" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="electrum-bar">
+					<div class="bar-fill" id="electrum-fill"></div>
+				</div>
+				<dl class="details">
+					<div><dt>Server address</dt><dd><code id="electrum-server">–</code><button class="copy" data-copy="electrum-server">Copy</button></dd></div>
+					<div><dt>Host</dt><dd><code id="electrum-host">–</code><button class="copy" data-copy="electrum-host">Copy</button></dd></div>
+					<div><dt>Port</dt><dd><code id="electrum-port">–</code><button class="copy" data-copy="electrum-port">Copy</button></dd></div>
+					<div><dt>Protocol</dt><dd><code id="electrum-protocol">–</code></dd></div>
+					<div><dt>Indexed</dt><dd><code id="electrum-height">–</code></dd></div>
+					<div><dt>Connected wallets</dt><dd><code id="electrum-sessions">–</code></dd></div>
+				</dl>
+				<p class="hint">It serves plain TCP on your local network. It is not encrypted, so don't forward this port on your router.</p>
+				<details id="electrum-log-details">
+					<summary><h2>Electrum log</h2></summary>
+					<pre id="electrum-log">Loading…</pre>
+				</details>
+			</section>
+
 			<section class="card">
 				<h2>Peers <span class="count" id="peer-count"></span></h2>
 				<div class="table-scroll">
