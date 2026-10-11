@@ -7,7 +7,7 @@ Docker image for the **Verus Node** umbrelOS app: the official Verus daemon (`ve
 - `server/public/` is the dashboard UI.
 - `icon.svg` is the Umbrel app icon.
 
-The Umbrel package that uses this image is `dwarner-verus` in [umbrel-verus-app-store](https://github.com/dwarner5522/umbrel-verus-app-store), where it runs next to the Electrum server image as one app.
+The Umbrel package that uses this image is `dwarner-verus` in [umbrel-app-store](https://github.com/dwarner5522/umbrel-app-store), where it runs next to the Electrum server image as one app.
 
 ## Configuration
 
