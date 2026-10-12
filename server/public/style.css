@@ -490,3 +490,90 @@ pre {
 #electrum details {
 	margin-top: 18px;
 }
+
+/* PBaaS chains */
+
+.field {
+	display: flex;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.field input {
+	flex: 1;
+	min-width: 0;
+	padding: 9px 12px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--page);
+	color: var(--text);
+	font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.field .button {
+	margin: 0;
+	white-space: nowrap;
+}
+
+.switch {
+	position: relative;
+	display: inline-block;
+	width: 42px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	border-radius: 999px;
+	background: var(--line);
+	cursor: pointer;
+	transition: background 0.15s ease;
+	vertical-align: middle;
+}
+
+.switch::after {
+	content: '';
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+	transition: transform 0.15s ease;
+}
+
+.switch[aria-checked='true'] {
+	background: var(--blue);
+}
+
+.switch[aria-checked='true']::after {
+	transform: translateX(18px);
+}
+
+.switch:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.chain-name {
+	font-weight: 600;
+}
+
+.chain-status small {
+	display: block;
+	color: var(--muted);
+}
+
+#chains details {
+	margin-top: 16px;
+}
+
+#chain-log-select {
+	margin-bottom: 8px;
+	padding: 6px 10px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--page);
+	color: var(--text);
+	font: inherit;
+}

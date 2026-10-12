@@ -21,9 +21,32 @@ The Umbrel package that uses this image is `dwarner-verus` in [umbrel-app-store]
 | `VERUSD_EXTRA_ARGS` | none | comma-delimited extra `verusd` flags |
 | `DEVICE_DOMAIN_NAME` | none | hostname shown in the connect details |
 | `ELECTRUM_STATUS_URL` | none | status page of an [umbrel-verus-electrum](https://github.com/dwarner5522/umbrel-verus-electrum) container, e.g. `http://electrum:3000`. When set, the dashboard also shows the Electrum server and serves its widget at `/api/widget/electrum` |
+| `PBAAS_EXTRA_ARGS` | `-maxconnections=24,-dbcache=100` | comma-delimited `verusd` flags for each PBaaS chain daemon |
 | `PORT` | `3000` | dashboard port |
 
 All state lives in `/data`: `/data/.komodo/VRSC` (blockchain, `wallet.dat`, `VRSC.conf`) and `/data/.zcash-params`.
+
+## PBaaS chains and merge mining
+
+The dashboard can run the daemons of other chains of the Verus network (vARRR, vDEX, CHIPS and any
+PBaaS chain launched from VRSC that the node knows about) next to `verusd`, each with a switch.
+Their data lives in `/data/.verus/pbaas`, and the switches are remembered in `/data/pbaas-chains.json`.
+
+With "Merge mine" on, the app sets the chain's mining distribution to the payout address and turns
+mining on in that chain's daemon. The daemon then registers its blocks with the VRSC daemon, and
+anyone mining VRSC through this node (for example with
+[umbrel-verus-datum](https://github.com/dwarner5522/umbrel-verus-datum)) mines that chain with the
+same hashes. Blocks whose coinbase pays the payout address are counted as found.
+
+`VRSC.conf` in the data directory is kept in step with `RPC_USER`, `RPC_PASS` and `RPC_PORT`, because
+that file is how a PBaaS daemon finds the VRSC daemon.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/chains` | the chains, their state and the payout address |
+| `POST /api/chains/<name>` | `{"enabled": true}` runs or stops a chain, `{"mine": true}` switches its merge mining |
+| `POST /api/payout` | `{"address": "R…"}` sets the address merge-mined rewards are paid to |
+| `GET /api/chains/<name>/logs` | the end of that chain's `debug.log` |
 
 ## Run it locally
 

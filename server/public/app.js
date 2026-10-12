@@ -160,6 +160,145 @@ function renderElectrum(electrum) {
 				: electrum.message || 'Starting…')
 }
 
+// ---------------------------------------------------------------------------
+// PBaaS chains
+
+let chainNames = ''
+
+function chainStatus(chain) {
+	if (chain.phase === 'off') return ['Off', '']
+	if (chain.error) return ['Attention', chain.error]
+	if (chain.phase !== 'running' || !chain.node) return [chain.phase === 'waiting' ? 'Waiting' : 'Starting', chain.message || '']
+	const node = chain.node
+	if (!node.synced) {
+		// Never show 100% until the chain is actually at the tip.
+		const percent = Math.min(Math.floor(node.progress * 1000) / 10, 99.9)
+		return [node.longestChain > 0 ? `Syncing ${percent}%` : 'Waiting for peers', chain.mine ? 'Merge mining starts once it has synced' : '']
+	}
+	if (chain.mining) return ['Merge mining', '']
+	return ['Synchronized', chain.mine ? 'Merge mining starts once VRSC has synced' : '']
+}
+
+function makeSwitch(name, key, label) {
+	const button = document.createElement('button')
+	button.type = 'button'
+	button.className = 'switch'
+	button.setAttribute('role', 'switch')
+	button.setAttribute('aria-checked', 'false')
+	button.setAttribute('aria-label', `${label} ${name}`)
+	button.addEventListener('click', () => setChain(name, {[key]: button.getAttribute('aria-checked') !== 'true'}, button))
+	return button
+}
+
+function renderChains(chains, payoutAddress) {
+	const running = chains.filter((chain) => chain.enabled).length
+	const mining = chains.filter((chain) => chain.mining).length
+	$('chains-state').textContent = running ? `· ${running} running${mining ? `, ${mining} merge mining` : ''}` : ''
+	$('payout-address').textContent = payoutAddress || 'not set'
+	const input = $('payout-input')
+	if (document.activeElement !== input && !input.value) input.placeholder = payoutAddress ? 'New R-address' : 'R-address'
+	$('payout-save').textContent = payoutAddress ? 'Change' : 'Save'
+
+	// Rows are only rebuilt when the list of chains changes, so the switches keep their focus.
+	const body = $('chain-rows')
+	const names = chains.map((chain) => chain.name).join(',')
+	if (names !== chainNames) {
+		chainNames = names
+		body.replaceChildren()
+		for (const chain of chains) {
+			const row = body.insertRow()
+			for (let cell = 0; cell < 5; cell++) row.insertCell()
+			row.insertCell().append(makeSwitch(chain.name, 'enabled', 'Run'))
+			row.insertCell().append(makeSwitch(chain.name, 'mine', 'Merge mine'))
+		}
+		if (!chains.length) {
+			const cell = body.insertRow().insertCell()
+			cell.colSpan = 7
+			cell.className = 'empty'
+			cell.textContent = 'No chains known yet'
+		}
+		const select = $('chain-log-select')
+		const selected = select.value
+		select.replaceChildren(...chains.map((chain) => new Option(chain.name, chain.name)))
+		if (chains.some((chain) => chain.name === selected)) select.value = selected
+	}
+	chains.forEach((chain, index) => fillChainRow(body.rows[index], chain))
+}
+
+function fillChainRow(row, chain) {
+	const [name, status, height, peers, found, run, mine] = row.cells
+	name.className = 'chain-name'
+	name.textContent = chain.name
+	const [text, detail] = chainStatus(chain)
+	status.className = 'chain-status'
+	status.replaceChildren(text)
+	if (detail) {
+		const small = document.createElement('small')
+		small.textContent = detail
+		status.append(small)
+	}
+	height.className = peers.className = found.className = 'num'
+	height.textContent = chain.node ? number.format(chain.node.blocks) : '–'
+	peers.textContent = chain.node ? number.format(chain.node.connections) : '–'
+	found.textContent = number.format(chain.foundCount)
+	run.firstChild.setAttribute('aria-checked', String(!!chain.enabled))
+	mine.firstChild.setAttribute('aria-checked', String(!!chain.mine))
+}
+
+async function post(url, body) {
+	const response = await fetch(url, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)})
+	const result = await response.json().catch(() => ({}))
+	if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`)
+	return result
+}
+
+async function setChain(name, patch, button) {
+	const result = $('chains-result')
+	if (patch.enabled === false && !confirm(`Stop the ${name} chain? Merge mining it stops too. Its downloaded blockchain is kept.`)) return
+	button.disabled = true
+	try {
+		const {chains, payoutAddress} = await post(`api/chains/${name}`, patch)
+		result.hidden = true
+		renderChains(chains, payoutAddress)
+	} catch (error) {
+		result.hidden = false
+		result.textContent = error.message
+	} finally {
+		button.disabled = false
+	}
+}
+
+$('payout-form').addEventListener('submit', async (event) => {
+	event.preventDefault()
+	const result = $('payout-result')
+	const address = $('payout-input').value.trim()
+	if (!address) return
+	const current = $('payout-address').textContent
+	if (current !== 'not set' && !confirm(`Pay merge-mined block rewards to ${address} instead of ${current}?`)) return
+	result.hidden = false
+	try {
+		const {chains, payoutAddress} = await post('api/payout', {address})
+		$('payout-input').value = ''
+		result.textContent = 'Saved.'
+		renderChains(chains, payoutAddress)
+	} catch (error) {
+		result.textContent = error.message
+	}
+})
+
+async function refreshChainLog() {
+	if (!$('chain-log-details').open || !$('chain-log-select').value) return
+	try {
+		const {lines} = await (await fetch(`api/chains/${$('chain-log-select').value}/logs`, {cache: 'no-store'})).json()
+		const log = $('chain-log')
+		const pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 24
+		log.textContent = lines.length ? lines.join('\n') : 'The log is empty. It fills once the chain has been started.'
+		if (pinned) log.scrollTop = log.scrollHeight
+	} catch {
+		// keep showing the last log we had
+	}
+}
+
 async function refresh() {
 	try {
 		const response = await fetch('api/status', {cache: 'no-store'})
@@ -170,6 +309,7 @@ async function refresh() {
 		else renderWaiting(status)
 		renderPeers(status.peers || [])
 		renderElectrum(status.electrum)
+		renderChains(status.chains || [], status.payoutAddress || '')
 
 		const error = status.error || status.node?.warnings
 		$('error').hidden = !error
@@ -280,9 +420,12 @@ $('bootstrap').addEventListener('click', async () => {
 
 $('log-details').addEventListener('toggle', refreshLog)
 $('electrum-log-details').addEventListener('toggle', refreshElectrumLog)
+$('chain-log-details').addEventListener('toggle', refreshChainLog)
+$('chain-log-select').addEventListener('change', refreshChainLog)
 
 loadConnect()
 refresh()
 setInterval(refresh, 3000)
 setInterval(refreshLog, 5000)
 setInterval(refreshElectrumLog, 5000)
+setInterval(refreshChainLog, 5000)

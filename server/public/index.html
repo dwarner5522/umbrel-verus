@@ -74,6 +74,38 @@
 				</section>
 			</div>
 
+			<section class="card" id="chains">
+				<h2>PBaaS chains <span class="count" id="chains-state"></span></h2>
+				<p class="hint">
+					Run other chains of the Verus network next to VRSC and merge mine them: the same hashes that mine VRSC through this node also mine every chain switched on here, at no extra cost to your miners. Each chain is a full node of its own that has to sync first and uses about 1 to 2 GB of memory while it runs.
+				</p>
+				<div class="table-scroll">
+					<table>
+						<thead>
+							<tr><th>Chain</th><th>Status</th><th class="num">Height</th><th class="num">Peers</th><th class="num">Blocks found</th><th>Run chain</th><th>Merge mine</th></tr>
+						</thead>
+						<tbody id="chain-rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+					</table>
+				</div>
+				<p class="hint" id="chains-result" hidden></p>
+				<dl class="details">
+					<div><dt>Merge mining pays to</dt><dd><code id="payout-address">not set</code></dd></div>
+				</dl>
+				<form class="field" id="payout-form">
+					<input id="payout-input" name="address" placeholder="R-address" autocomplete="off" spellcheck="false" maxlength="34" aria-label="Payout address for merge mining" />
+					<button class="button" id="payout-save" type="submit">Save</button>
+				</form>
+				<p class="hint" id="payout-result" hidden></p>
+				<p class="hint">
+					Block rewards of the merge-mined chains are paid straight to this R-address, in each chain's own coin. The same address works on every chain; use one from a wallet you control. The Verus Datum app sets it for you when you save a payout address there.
+				</p>
+				<details id="chain-log-details">
+					<summary><h2>Chain log</h2></summary>
+					<select id="chain-log-select" aria-label="Chain"></select>
+					<pre id="chain-log">Loading…</pre>
+				</details>
+			</section>
+
 			<section class="card" id="electrum" hidden>
 				<h2>Electrum server <span class="count" id="electrum-state"></span></h2>
 				<p class="hint" id="electrum-hint">Lite wallets such as Verus Desktop can use this server instead of a public one, so your addresses and balances are only looked up on your own node.</p>

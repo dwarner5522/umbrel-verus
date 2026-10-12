@@ -9,6 +9,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const {spawn} = require('node:child_process')
+const {createChains, writeRootConf} = require('./chains')
 
 const HOME = process.env.HOME || '/data'
 
@@ -24,6 +25,8 @@ const config = {
 	rpcPass: process.env.RPC_PASS || '',
 	appsSubnet: process.env.APPS_SUBNET || '',
 	extraArgs: (process.env.VERUSD_EXTRA_ARGS || '').split(',').map((arg) => arg.trim()).filter(Boolean),
+	// Startup flags for each PBaaS chain daemon (vARRR, vDEX, CHIPS, …), comma-delimited like VERUSD_EXTRA_ARGS.
+	pbaasExtraArgs: (process.env.PBAAS_EXTRA_ARGS ?? '-maxconnections=24,-dbcache=100').split(',').map((arg) => arg.trim()).filter(Boolean),
 	deviceDomainName: process.env.DEVICE_DOMAIN_NAME || '',
 	// Status page of the Electrum server container that ships in the same Umbrel app, if any.
 	electrumUrl: (process.env.ELECTRUM_STATUS_URL || '').replace(/\/+$/, ''),
@@ -63,6 +66,7 @@ let shuttingDown = false
 let restartTimer = null
 let restartNow = false
 let pollTimer = null
+let chainsTimer = null
 let electrumTimer = null
 
 const log = (...args) => console.log(new Date().toISOString(), ...args)
@@ -181,6 +185,10 @@ async function finishBootstrap() {
 async function startDaemon() {
 	if (shuttingDown || child) return
 	await fsp.mkdir(config.dataDir, {recursive: true})
+	// the PBaaS chain daemons read the RPC details of this one from VRSC.conf
+	await writeRootConf(config.dataDir, {user: config.rpcUser, pass: config.rpcPass, port: config.rpcPort}).catch((error) =>
+		log('Could not update VRSC.conf:', error.message),
+	)
 
 	const bootstrap = await nextBootstrapAttempt()
 	if (!bootstrap) await removeBootstrapArchive()
@@ -357,6 +365,22 @@ async function poll() {
 }
 
 // ---------------------------------------------------------------------------
+// PBaaS chains
+
+const chains = createChains({
+	home: HOME,
+	verusdBin: config.verusdBin,
+	extraArgs: config.pbaasExtraArgs,
+	log,
+	root: () => ({
+		running: state.phase === 'running' && !!state.node,
+		synced: state.phase === 'running' && !!state.node?.synced,
+		blocks: state.node?.blocks || 0,
+		rpc,
+	}),
+})
+
+// ---------------------------------------------------------------------------
 // Electrum server
 
 async function electrumFetch(pathname) {
@@ -528,11 +552,32 @@ function isSameOrigin(request) {
 	}
 }
 
+function readBody(request, limit = 4096) {
+	return new Promise((resolve, reject) => {
+		let data = ''
+		request.setEncoding('utf8')
+		request.on('data', (chunk) => {
+			data += chunk
+			if (data.length > limit) reject(new Error('Request too large'))
+		})
+		request.on('end', () => resolve(data))
+		request.on('error', reject)
+	})
+}
+
 const server = http.createServer(async (request, response) => {
 	const {pathname} = new URL(request.url, 'http://localhost')
 	try {
 		if (request.method === 'GET') {
-			if (pathname === '/api/status') return sendJson(response, 200, state)
+			if (pathname === '/api/status') {
+				return sendJson(response, 200, {...state, chains: chains.list(), payoutAddress: chains.payoutAddress()})
+			}
+			if (pathname === '/api/chains') return sendJson(response, 200, {chains: chains.list(), payoutAddress: chains.payoutAddress()})
+			const chainLog = /^\/api\/chains\/([A-Za-z0-9]+)\/logs$/.exec(pathname)
+			if (chainLog) {
+				const lines = await chains.logs(chainLog[1])
+				return lines ? sendJson(response, 200, {lines}) : sendJson(response, 404, {error: 'Unknown chain'})
+			}
 			if (pathname === '/api/connect') return sendJson(response, 200, connectDetails())
 			if (pathname === '/api/logs') return sendJson(response, 200, {lines: await tailLog()})
 			if (pathname === '/api/widget/stats') return sendJson(response, 200, widgetStats())
@@ -554,6 +599,24 @@ const server = http.createServer(async (request, response) => {
 			await requestBootstrap()
 			return sendJson(response, 202, {ok: true})
 		}
+		// Switch a PBaaS chain or its merge mining on or off: {"enabled": true} or {"mine": true}
+		const chainPost = request.method === 'POST' && /^\/api\/chains\/([A-Za-z0-9]+)$/.exec(pathname)
+		if (chainPost || (request.method === 'POST' && pathname === '/api/payout')) {
+			if (!isSameOrigin(request)) return sendJson(response, 403, {error: 'Forbidden'})
+			let body
+			try {
+				body = JSON.parse(await readBody(request))
+			} catch {
+				return sendJson(response, 400, {error: 'Invalid request'})
+			}
+			if (!body || typeof body !== 'object') return sendJson(response, 400, {error: 'Invalid request'})
+			const result = chainPost
+				? chains.setChain(chainPost[1], {enabled: body.enabled, mine: body.mine})
+				: chains.setPayout(typeof body.address === 'string' ? body.address.trim() : null)
+			if (result.error) return sendJson(response, result.status, {error: result.error})
+			chains.tick()
+			return sendJson(response, 200, {ok: true, chains: chains.list(), payoutAddress: chains.payoutAddress()})
+		}
 		sendJson(response, 405, {error: 'Method not allowed'})
 	} catch (error) {
 		log('Request failed:', error.message)
@@ -572,9 +635,12 @@ async function shutdown(signal) {
 	state.message = 'Shutting down…'
 	clearTimeout(restartTimer)
 	clearInterval(pollTimer)
+	clearInterval(chainsTimer)
 	clearInterval(electrumTimer)
 	server.close()
 	server.closeAllConnections?.()
+	// the chain daemons talk to verusd while they shut down, so they go first
+	await chains.stopAll()
 	await stopDaemon()
 	process.exit(0)
 }
@@ -587,6 +653,7 @@ async function main() {
 		console.error('RPC_PASS is required')
 		process.exit(1)
 	}
+	await chains.load()
 	server.listen(config.httpPort, () => log(`Dashboard listening on :${config.httpPort}`))
 	if (config.electrumUrl) {
 		pollElectrum()
@@ -596,6 +663,7 @@ async function main() {
 	if (shuttingDown) return
 	await startDaemon()
 	pollTimer = setInterval(poll, POLL_INTERVAL_MS)
+	chainsTimer = setInterval(() => chains.tick().catch((error) => log('PBaaS chains:', error.message)), POLL_INTERVAL_MS)
 }
 
 main().catch((error) => {
