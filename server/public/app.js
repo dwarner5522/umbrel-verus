@@ -165,9 +165,21 @@ function renderElectrum(electrum) {
 
 let chainNames = ''
 
+const size = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`)
+
 function chainStatus(chain) {
 	if (chain.phase === 'off') return ['Off', '']
+	const bootstrap = chain.bootstrap
+	if (bootstrap) {
+		if (bootstrap.stage === 'downloading' && bootstrap.total) {
+			// never 100% until it is installed
+			const percent = Math.min(Math.floor((bootstrap.received / bootstrap.total) * 1000) / 10, 99.9)
+			return [`Bootstrap ${percent}%`, `${size(bootstrap.received)} of ${size(bootstrap.total)} downloaded`]
+		}
+		return bootstrap.stage === 'installing' ? ['Installing bootstrap', 'Checking the download and moving it into place'] : ['Bootstrap', 'Checking the signature']
+	}
 	if (chain.error) return ['Attention', chain.error]
+	if (chain.bootstrapPending) return ['Bootstrap queued', chain.message || '']
 	if (chain.phase !== 'running' || !chain.node) return [chain.phase === 'waiting' ? 'Waiting' : 'Starting', chain.message || '']
 	const node = chain.node
 	if (!node.synced) {
@@ -193,7 +205,7 @@ function makeSwitch(name, key, label) {
 function renderChains(chains, payoutAddress) {
 	const running = chains.filter((chain) => chain.enabled).length
 	const mining = chains.filter((chain) => chain.mining).length
-	$('chains-state').textContent = running ? `· ${running} running${mining ? `, ${mining} merge mining` : ''}` : ''
+	$('chains-state').textContent = running ? `· ${running} on${mining ? `, ${mining} merge mining` : ''}` : ''
 	$('payout-address').textContent = payoutAddress || 'not set'
 	const input = $('payout-input')
 	if (document.activeElement !== input && !input.value) input.placeholder = payoutAddress ? 'New R-address' : 'R-address'
@@ -210,10 +222,16 @@ function renderChains(chains, payoutAddress) {
 			for (let cell = 0; cell < 5; cell++) row.insertCell()
 			row.insertCell().append(makeSwitch(chain.name, 'enabled', 'Run'))
 			row.insertCell().append(makeSwitch(chain.name, 'mine', 'Merge mine'))
+			const button = document.createElement('button')
+			button.type = 'button'
+			button.className = 'copy'
+			button.textContent = 'Bootstrap'
+			button.addEventListener('click', () => bootstrapChain(chain.name, button))
+			row.insertCell().append(button)
 		}
 		if (!chains.length) {
 			const cell = body.insertRow().insertCell()
-			cell.colSpan = 7
+			cell.colSpan = 8
 			cell.className = 'empty'
 			cell.textContent = 'No chains known yet'
 		}
@@ -226,7 +244,7 @@ function renderChains(chains, payoutAddress) {
 }
 
 function fillChainRow(row, chain) {
-	const [name, status, height, peers, found, run, mine] = row.cells
+	const [name, status, height, peers, found, run, mine, action] = row.cells
 	name.className = 'chain-name'
 	name.textContent = chain.name
 	const [text, detail] = chainStatus(chain)
@@ -243,6 +261,22 @@ function fillChainRow(row, chain) {
 	found.textContent = number.format(chain.foundCount)
 	run.firstChild.setAttribute('aria-checked', String(!!chain.enabled))
 	mine.firstChild.setAttribute('aria-checked', String(!!chain.mine))
+	action.firstChild.disabled = !!chain.bootstrap || chain.bootstrapPending
+}
+
+async function bootstrapChain(name, button) {
+	const result = $('chains-result')
+	if (!confirm(`Replace the ${name} blockchain with the latest bootstrap from bootstrap.verus.expert? It is several gigabytes; it is checked against its signature before it is installed, and the chain is switched on for it.`)) return
+	button.disabled = true
+	try {
+		const {chains, payoutAddress} = await post(`api/chains/${name}/bootstrap`, {})
+		result.hidden = true
+		renderChains(chains, payoutAddress)
+	} catch (error) {
+		result.hidden = false
+		result.textContent = error.message
+		button.disabled = false
+	}
 }
 
 async function post(url, body) {

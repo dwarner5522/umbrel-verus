@@ -6,11 +6,13 @@
 // VRSC through this node mines those chains with the same hashes.
 
 const http = require('node:http')
+const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const readline = require('node:readline')
 const {spawn} = require('node:child_process')
+const bootstrap = require('./bootstrap')
 
 const VRSC_ID = 'i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV'
 
@@ -25,6 +27,23 @@ const RESTART_DELAY_MS = 15_000
 const DISCOVERY_INTERVAL_MS = 10 * 60_000
 const MAX_FOUND = 100
 const SCAN_BLOCKS_PER_TICK = 10
+// a chain daemon loading its block index takes a lot of CPU, so they start one after the other
+const START_SPACING_MS = 60_000
+const BOOTSTRAP_ATTEMPTS = 3
+const BOOTSTRAP_RETRY_MS = 10 * 60_000
+// how long merge mining stays off after the daemon was found hashing on the CPU itself
+const HASHING_PAUSE_MS = 15 * 60_000
+
+// The chain daemons run at a lower CPU and disk priority than everything else on the Umbrel, so
+// a chain that is syncing slows down instead of the device. -t: carry on if the priority can't be set.
+const NICE = ['/usr/bin/nice', '/bin/nice'].find((file) => fs.existsSync(file))
+const IONICE = ['/usr/bin/ionice', '/bin/ionice'].find((file) => fs.existsSync(file))
+function lowPriority(command, args) {
+	let line = [command, ...args]
+	if (NICE) line = [NICE, '-n', '15', ...line]
+	if (IONICE) line = [IONICE, '-t', '-c', '2', '-n', '7', ...line]
+	return [line[0], line.slice(1)]
+}
 
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 const sha256 = (buffer) => crypto.createHash('sha256').update(buffer).digest()
@@ -116,6 +135,7 @@ function createChains(options) {
 	let stopping = false
 	let ticking = false
 	let discoveredAt = 0
+	let lastStartAt = 0
 	let saveQueue = Promise.resolve()
 
 	function addChain(definition) {
@@ -136,6 +156,17 @@ function createChains(options) {
 			rpc: null,
 			restartAt: 0,
 			lastOutput: '',
+			// has reached the tip at least once: it doesn't have to wait for other chains to sync
+			everSynced: false,
+			// bootstrap: requested -> running (progress in `bootstrap`) -> done; held after it failed for good
+			bootstrapRequested: false,
+			bootstrapping: false,
+			bootstrap: null,
+			bootstrapAbort: null,
+			held: false,
+			hashing: 0,
+			miningPausedUntil: 0,
+			notice: null,
 		}
 		chains.set(definition.name, chain)
 		return chain
@@ -144,7 +175,15 @@ function createChains(options) {
 	function save() {
 		const data = {payoutAddress, chains: {}}
 		for (const chain of chains.values()) {
-			data.chains[chain.name] = {id: chain.id, idHex: chain.idHex, blockTime: chain.blockTime, enabled: chain.enabled, mine: chain.mine, found: chain.found}
+			data.chains[chain.name] = {
+				id: chain.id,
+				idHex: chain.idHex,
+				blockTime: chain.blockTime,
+				enabled: chain.enabled,
+				mine: chain.mine,
+				synced: chain.everSynced,
+				found: chain.found,
+			}
 		}
 		saveQueue = saveQueue
 			.then(async () => {
@@ -175,6 +214,11 @@ function createChains(options) {
 			chain.enabled = entry.enabled === true
 			chain.mine = entry.mine === true
 			chain.found = Array.isArray(entry.found) ? entry.found.slice(-MAX_FOUND) : []
+			chain.everSynced = entry.synced === true
+		}
+		// a bootstrap that a restart interrupted starts again
+		for (const chain of chains.values()) {
+			if ((await bootstrap.readMarker(dataDir(chain))) !== null) chain.bootstrapRequested = true
 		}
 	}
 
@@ -228,7 +272,8 @@ function createChains(options) {
 		chain.lastOutput = ''
 
 		log(`Starting verusd for ${chain.name}`)
-		const proc = spawn(verusdBin, [`-chain=${chain.name}`, '-showmetrics=0', ...extraArgs], {
+		lastStartAt = Date.now()
+		const proc = spawn(...lowPriority(verusdBin, [`-chain=${chain.name}`, '-showmetrics=0', ...extraArgs]), {
 			env: {...process.env, HOME: home},
 			stdio: ['ignore', 'pipe', 'pipe'],
 		})
@@ -299,7 +344,19 @@ function createChains(options) {
 	}
 
 	async function reconcileMining(chain, call, miningInfo, rootState) {
-		const want = chain.mine && !!payoutAddress && chain.node.synced && rootState.synced
+		// Merge mining only hands blocks to the VRSC daemon. A daemon that can't reach it mines on its
+		// own instead, on the Umbrel's CPU: switch that off for a while rather than let it run.
+		if (miningInfo.generate && Number(miningInfo.localhashps) > 0) chain.hashing++
+		else chain.hashing = 0
+		if (chain.hashing >= 2) {
+			chain.hashing = 0
+			chain.miningPausedUntil = Date.now() + HASHING_PAUSE_MS
+			chain.notice = `${chain.name} was mining on the Umbrel's CPU instead of through VRSC, so merge mining is paused for 15 minutes.`
+			log(chain.notice)
+		}
+		const paused = Date.now() < chain.miningPausedUntil
+		if (!paused) chain.notice = null
+		const want = chain.mine && !!payoutAddress && chain.node.synced && rootState.synced && !paused
 		if (want) {
 			const distribution = await call('getminingdistribution')
 			const keys = distribution && typeof distribution === 'object' ? Object.keys(distribution) : []
@@ -344,6 +401,10 @@ function createChains(options) {
 			chain.phase = 'running'
 			chain.message = synced ? 'Synchronized' : 'Synchronizing'
 			chain.error = null
+			if (synced && !chain.everSynced) {
+				chain.everSynced = true
+				save()
+			}
 			await reconcileMining(chain, call, miningInfo, rootState)
 		} catch (error) {
 			if (chain.proc !== proc || chain.phase === 'stopping') return
@@ -357,32 +418,128 @@ function createChains(options) {
 		}
 	}
 
+	// Another chain that is downloading a bootstrap or syncing: only one does that at a time. Of the
+	// chains still waiting for a bootstrap, the one listed first goes first.
+	function busyChain(except) {
+		let before = true
+		for (const chain of chains.values()) {
+			if (chain === except) {
+				before = false
+				continue
+			}
+			if (!chain.enabled || chain.held) continue
+			// a bootstrap that failed and waits to be tried again doesn't hold the others up
+			if (chain.bootstrapping || (before && chain.bootstrapRequested && Date.now() >= chain.restartAt)) return chain
+			if (chain.proc && !chain.everSynced && !chain.node?.synced) return chain
+		}
+		return null
+	}
+
+	async function runBootstrap(chain, rootState) {
+		const dir = dataDir(chain)
+		const controller = new AbortController()
+		chain.bootstrapping = true
+		chain.bootstrapAbort = controller
+		chain.error = null
+		chain.phase = 'bootstrapping'
+		chain.message = 'Checking the bootstrap…'
+		const attempts = ((await bootstrap.readMarker(dir)) ?? 0) + 1
+		try {
+			await bootstrap.writeMarker(dir, attempts)
+			await bootstrap.installBootstrap({
+				chain,
+				dir,
+				rootRpc: rootState.rpc,
+				lowPriority,
+				log,
+				signal: controller.signal,
+				progress: (update) => (chain.bootstrap = update),
+			})
+			await bootstrap.clearMarker(dir)
+			chain.bootstrapRequested = false
+			chain.restartAt = 0
+		} catch (error) {
+			if (stopping) return // the marker stays: it starts again after the restart
+			if (controller.signal.aborted) {
+				// switched off while downloading
+				await bootstrap.clearMarker(dir)
+				chain.bootstrapRequested = false
+				return
+			}
+			log(`${chain.name} bootstrap failed (attempt ${attempts}): ${error.message}`)
+			if (/There is no bootstrap/.test(error.message)) {
+				// nothing to download: sync from the network
+				await bootstrap.clearMarker(dir)
+				chain.bootstrapRequested = false
+				chain.restartAt = 0
+				return
+			}
+			chain.error = `Bootstrap failed: ${error.message}`
+			if (attempts >= BOOTSTRAP_ATTEMPTS) {
+				await bootstrap.clearMarker(dir)
+				chain.bootstrapRequested = false
+				chain.held = true
+			} else {
+				chain.restartAt = Date.now() + BOOTSTRAP_RETRY_MS
+			}
+		} finally {
+			chain.bootstrapping = false
+			chain.bootstrapAbort = null
+			chain.bootstrap = null
+		}
+	}
+
+	function waiting(chain, message) {
+		chain.phase = 'waiting'
+		chain.message = message
+	}
+
+	async function tickChain(chain, rootState) {
+		if (!chain.enabled) {
+			chain.bootstrapAbort?.abort()
+			if (chain.proc && chain.phase !== 'stopping') stop(chain)
+			return
+		}
+		if (chain.bootstrapping) return
+		if (chain.held) {
+			if (chain.proc && chain.phase !== 'stopping') stop(chain)
+			return waiting(chain, 'Stopped. Press Bootstrap to try again, or switch the chain off.')
+		}
+		if (chain.bootstrapRequested) {
+			if (chain.proc) {
+				if (chain.phase !== 'stopping') stop(chain)
+				return
+			}
+			// the signature check asks the VRSC daemon for the signer's keys
+			if (!rootState.synced) return waiting(chain, 'Waiting for the VRSC node to finish syncing')
+			const other = busyChain(chain)
+			if (other) return waiting(chain, `Waiting for ${other.name} to finish syncing`)
+			if (Date.now() < chain.restartAt) return waiting(chain, 'Trying the bootstrap again shortly')
+			runBootstrap(chain, rootState).catch((error) => log(`${chain.name} bootstrap:`, error.message))
+			return
+		}
+		if (!chain.proc) {
+			// the daemon reads its chain definition from the VRSC daemon the first time it starts
+			if (!rootState.synced) return waiting(chain, 'Waiting for the VRSC node to finish syncing')
+			const other = !chain.everSynced && busyChain(chain)
+			if (other) return waiting(chain, `Waiting for ${other.name} to finish syncing`)
+			if (Date.now() < chain.restartAt) return
+			if (Date.now() - lastStartAt < START_SPACING_MS) return waiting(chain, 'Starting shortly')
+			await fsp.mkdir(pbaasDir, {recursive: true})
+			start(chain)
+			return
+		}
+		if (chain.phase !== 'stopping') await poll(chain, rootState)
+	}
+
 	async function tick() {
 		if (ticking || stopping) return
 		ticking = true
 		try {
 			const rootState = root()
 			if (rootState.running && Date.now() - discoveredAt > DISCOVERY_INTERVAL_MS) await discover(rootState)
-			await Promise.all(
-				[...chains.values()].map(async (chain) => {
-					if (!chain.enabled) {
-						if (chain.proc && chain.phase !== 'stopping') stop(chain)
-						return
-					}
-					if (!chain.proc) {
-						// the daemon reads its chain definition from the VRSC daemon the first time it starts
-						if (!rootState.synced) {
-							chain.phase = 'waiting'
-							chain.message = 'Waiting for the VRSC node to finish syncing'
-						} else if (Date.now() >= chain.restartAt) {
-							await fsp.mkdir(pbaasDir, {recursive: true})
-							start(chain)
-						}
-						return
-					}
-					if (chain.phase !== 'stopping') await poll(chain, rootState)
-				}),
-			)
+			// in list order, so the first chain waiting to sync is the next one to go
+			for (const chain of chains.values()) await tickChain(chain, rootState)
 		} finally {
 			ticking = false
 		}
@@ -397,7 +554,9 @@ function createChains(options) {
 			mine: chain.mine,
 			phase: chain.enabled || chain.proc ? chain.phase : 'off',
 			message: chain.enabled || chain.proc ? chain.message : 'Off',
-			error: chain.enabled ? chain.error : null,
+			error: chain.enabled ? chain.error || chain.notice : null,
+			bootstrap: chain.bootstrap,
+			bootstrapPending: chain.bootstrapRequested && !chain.bootstrapping,
 			node: chain.node,
 			mining: chain.mining,
 			foundCount: chain.found.length,
@@ -405,8 +564,30 @@ function createChains(options) {
 		}))
 	}
 
+	// A chain switched on without any blockchain data starts from a bootstrap: syncing a chain from its
+	// first block is what takes the most CPU and time.
+	async function switchedOn(chain) {
+		chain.held = false
+		chain.error = null
+		chain.restartAt = 0
+		const dir = dataDir(chain)
+		if (!chain.proc && !chain.bootstrapRequested && !bootstrap.hasChainData(dir)) {
+			chain.bootstrapRequested = true
+			await bootstrap.writeMarker(dir, 0)
+		}
+	}
+
+	async function switchedOff(chain) {
+		chain.held = false
+		chain.error = null
+		if (chain.bootstrapRequested && !chain.bootstrapping) {
+			chain.bootstrapRequested = false
+			await bootstrap.clearMarker(dataDir(chain))
+		}
+	}
+
 	// patch: {enabled?: boolean, mine?: boolean}
-	function setChain(name, patch) {
+	async function setChain(name, patch) {
 		const chain = chains.get(name)
 		if (!chain) return {status: 404, error: 'Unknown chain'}
 		if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') return {status: 400, error: 'enabled must be true or false'}
@@ -414,20 +595,29 @@ function createChains(options) {
 		if (patch.mine === true && !payoutAddress) {
 			return {status: 409, error: 'Set a payout address first. Merge-mined rewards need somewhere to go.'}
 		}
-		if (patch.enabled !== undefined) {
-			chain.enabled = patch.enabled
-			if (patch.enabled) {
-				chain.restartAt = 0
-				chain.error = null
-			}
-		}
+		const wasEnabled = chain.enabled
+		if (patch.enabled !== undefined) chain.enabled = patch.enabled
 		if (patch.mine !== undefined) chain.mine = patch.mine
 		// merge mining needs the chain's own daemon
-		if (patch.mine === true) {
-			if (!chain.enabled) chain.restartAt = 0
-			chain.enabled = true
-		}
+		if (patch.mine === true) chain.enabled = true
 		if (patch.enabled === false) chain.mine = false
+		if (chain.enabled && !wasEnabled) await switchedOn(chain)
+		if (!chain.enabled && wasEnabled) await switchedOff(chain)
+		save()
+		return {status: 200}
+	}
+
+	// Replace the chain's blockchain with a fresh bootstrap. The chain is switched on for it.
+	async function requestBootstrap(name) {
+		const chain = chains.get(name)
+		if (!chain) return {status: 404, error: 'Unknown chain'}
+		if (chain.bootstrapping) return {status: 409, error: 'A bootstrap is already being downloaded.'}
+		chain.enabled = true
+		chain.held = false
+		chain.error = null
+		chain.restartAt = 0
+		chain.bootstrapRequested = true
+		await bootstrap.writeMarker(dataDir(chain), 0)
 		save()
 		return {status: 200}
 	}
@@ -464,10 +654,11 @@ function createChains(options) {
 
 	async function stopAll() {
 		stopping = true
+		for (const chain of chains.values()) chain.bootstrapAbort?.abort()
 		await Promise.all([...chains.values()].map(stop))
 	}
 
-	return {load, tick, list, setChain, setPayout, logs, stopAll, payoutAddress: () => payoutAddress}
+	return {load, tick, list, setChain, requestBootstrap, setPayout, logs, stopAll, payoutAddress: () => payoutAddress}
 }
 
 module.exports = {createChains, writeRootConf, isPayoutAddress, parseConf, KNOWN_CHAINS}

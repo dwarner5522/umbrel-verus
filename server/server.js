@@ -26,7 +26,8 @@ const config = {
 	appsSubnet: process.env.APPS_SUBNET || '',
 	extraArgs: (process.env.VERUSD_EXTRA_ARGS || '').split(',').map((arg) => arg.trim()).filter(Boolean),
 	// Startup flags for each PBaaS chain daemon (vARRR, vDEX, CHIPS, …), comma-delimited like VERUSD_EXTRA_ARGS.
-	pbaasExtraArgs: (process.env.PBAAS_EXTRA_ARGS ?? '-maxconnections=24,-dbcache=100').split(',').map((arg) => arg.trim()).filter(Boolean),
+	// The defaults keep a chain daemon small: few peers, a small cache, one script verification thread.
+	pbaasExtraArgs: (process.env.PBAAS_EXTRA_ARGS ?? '-maxconnections=8,-dbcache=64,-par=1,-maxsigcachesize=16,-checkblocks=12').split(',').map((arg) => arg.trim()).filter(Boolean),
 	deviceDomainName: process.env.DEVICE_DOMAIN_NAME || '',
 	// Status page of the Electrum server container that ships in the same Umbrel app, if any.
 	electrumUrl: (process.env.ELECTRUM_STATUS_URL || '').replace(/\/+$/, ''),
@@ -601,6 +602,15 @@ const server = http.createServer(async (request, response) => {
 		}
 		// Switch a PBaaS chain or its merge mining on or off: {"enabled": true} or {"mine": true}
 		const chainPost = request.method === 'POST' && /^\/api\/chains\/([A-Za-z0-9]+)$/.exec(pathname)
+		// Download and install a fresh bootstrap of a PBaaS chain
+		const bootstrapPost = request.method === 'POST' && /^\/api\/chains\/([A-Za-z0-9]+)\/bootstrap$/.exec(pathname)
+		if (bootstrapPost) {
+			if (!isSameOrigin(request)) return sendJson(response, 403, {error: 'Forbidden'})
+			const result = await chains.requestBootstrap(bootstrapPost[1])
+			if (result.error) return sendJson(response, result.status, {error: result.error})
+			chains.tick()
+			return sendJson(response, 200, {ok: true, chains: chains.list(), payoutAddress: chains.payoutAddress()})
+		}
 		if (chainPost || (request.method === 'POST' && pathname === '/api/payout')) {
 			if (!isSameOrigin(request)) return sendJson(response, 403, {error: 'Forbidden'})
 			let body
@@ -611,7 +621,7 @@ const server = http.createServer(async (request, response) => {
 			}
 			if (!body || typeof body !== 'object') return sendJson(response, 400, {error: 'Invalid request'})
 			const result = chainPost
-				? chains.setChain(chainPost[1], {enabled: body.enabled, mine: body.mine})
+				? await chains.setChain(chainPost[1], {enabled: body.enabled, mine: body.mine})
 				: chains.setPayout(typeof body.address === 'string' ? body.address.trim() : null)
 			if (result.error) return sendJson(response, result.status, {error: result.error})
 			chains.tick()

@@ -21,7 +21,8 @@ The Umbrel package that uses this image is `dwarner-verus` in [umbrel-app-store]
 | `VERUSD_EXTRA_ARGS` | none | comma-delimited extra `verusd` flags |
 | `DEVICE_DOMAIN_NAME` | none | hostname shown in the connect details |
 | `ELECTRUM_STATUS_URL` | none | status page of an [umbrel-verus-electrum](https://github.com/dwarner5522/umbrel-verus-electrum) container, e.g. `http://electrum:3000`. When set, the dashboard also shows the Electrum server and serves its widget at `/api/widget/electrum` |
-| `PBAAS_EXTRA_ARGS` | `-maxconnections=24,-dbcache=100` | comma-delimited `verusd` flags for each PBaaS chain daemon |
+| `PBAAS_EXTRA_ARGS` | `-maxconnections=8,-dbcache=64,-par=1,-maxsigcachesize=16,-checkblocks=12` | comma-delimited `verusd` flags for each PBaaS chain daemon |
+| `PBAAS_BOOTSTRAP_URL` | `https://bootstrap.verus.expert` | where PBaaS chain bootstraps are downloaded from |
 | `PORT` | `3000` | dashboard port |
 
 All state lives in `/data`: `/data/.komodo/VRSC` (blockchain, `wallet.dat`, `VRSC.conf`) and `/data/.zcash-params`.
@@ -38,6 +39,24 @@ anyone mining VRSC through this node (for example with
 [umbrel-verus-datum](https://github.com/dwarner5522/umbrel-verus-datum)) mines that chain with the
 same hashes. Blocks whose coinbase pays the payout address are counted as found.
 
+To keep a small device usable, the chain daemons:
+
+- run at a lower CPU and disk priority (`nice 15`, `ionice` best effort 7) than everything else;
+- start with few peers, a small cache and one script verification thread (`PBAAS_EXTRA_ARGS`);
+- sync one at a time, and start at least a minute apart;
+- have merge mining paused for 15 minutes when a daemon is found hashing on the CPU itself, which
+  is what it does when it can't hand its blocks to the VRSC daemon.
+
+A chain switched on without any blockchain data starts from a bootstrap, and the Bootstrap button
+loads a fresh one at any time. Archives come from bootstrap.verus.expert and are installed only if:
+their `.verusid` signature is from the `Oink bootstrap releases@` VerusID (its keys are looked up on
+the VRSC daemon, and the signature is checked here because it was made on the PBaaS chain itself, see
+`server/verusid.js`), the sha256 of the download matches the signed one, and the archive contains no
+links. The download streams straight into `tar`, resumes after a dropped connection, and replaces
+`blocks`, `chainstate` and the other chain data; the chain's wallet and conf file are kept.
+`verusd -bootstrap` is not used for these chains: its download host no longer exists, and it does
+not check a signature.
+
 `VRSC.conf` in the data directory is kept in step with `RPC_USER`, `RPC_PASS` and `RPC_PORT`, because
 that file is how a PBaaS daemon finds the VRSC daemon.
 
@@ -45,6 +64,7 @@ that file is how a PBaaS daemon finds the VRSC daemon.
 | --- | --- |
 | `GET /api/chains` | the chains, their state and the payout address |
 | `POST /api/chains/<name>` | `{"enabled": true}` runs or stops a chain, `{"mine": true}` switches its merge mining |
+| `POST /api/chains/<name>/bootstrap` | download and install a fresh bootstrap of that chain |
 | `POST /api/payout` | `{"address": "R…"}` sets the address merge-mined rewards are paid to |
 | `GET /api/chains/<name>/logs` | the end of that chain's `debug.log` |
 

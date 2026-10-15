@@ -77,14 +77,17 @@
 			<section class="card" id="chains">
 				<h2>PBaaS chains <span class="count" id="chains-state"></span></h2>
 				<p class="hint">
-					Run other chains of the Verus network next to VRSC and merge mine them: the same hashes that mine VRSC through this node also mine every chain switched on here, at no extra cost to your miners. Each chain is a full node of its own that has to sync first and uses about 1 to 2 GB of memory while it runs.
+					Run other chains of the Verus network next to VRSC and merge mine them: the same hashes that mine VRSC through this node also mine every chain switched on here, at no extra cost to your miners. Each chain is a full node of its own that needs memory and disk space while it runs.
+				</p>
+				<p class="hint">
+					A chain switched on for the first time starts from a bootstrap: a recent copy of its blockchain from bootstrap.verus.expert, checked against the signature of its publisher before it is installed. Chains sync one at a time and run at a lower priority than the rest of your Umbrel.
 				</p>
 				<div class="table-scroll">
 					<table>
 						<thead>
-							<tr><th>Chain</th><th>Status</th><th class="num">Height</th><th class="num">Peers</th><th class="num">Blocks found</th><th>Run chain</th><th>Merge mine</th></tr>
+							<tr><th>Chain</th><th>Status</th><th class="num">Height</th><th class="num">Peers</th><th class="num">Blocks found</th><th>Run chain</th><th>Merge mine</th><th></th></tr>
 						</thead>
-						<tbody id="chain-rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+						<tbody id="chain-rows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
 					</table>
 				</div>
 				<p class="hint" id="chains-result" hidden></p>
