@@ -1,0 +1,24 @@
+2026-10-16T22:18:53.974Z Dashboard listening on :33000
+2026-10-16T22:18:53.977Z Downloading sapling-spend.params
+2026-10-16T22:19:03.107Z Verified sapling-spend.params
+2026-10-16T22:19:03.107Z Downloading sapling-output.params
+2026-10-16T22:19:03.772Z Verified sapling-output.params
+2026-10-16T22:19:03.772Z Downloading sprout-groth16.params
+2026-10-16T22:20:51.490Z Verified sprout-groth16.params
+2026-10-16T22:20:51.494Z Starting verusd
+2026-10-16T22:20:51.498Z Failed to start verusd: spawn /tmp/claude-1000/-home-admin1-Desktop-verus-umbrel/6c56dea0-37c7-4d33-a44d-991ef99b8742/scratchpad/t2/bin/verusd ENOENT
+2026-10-16T22:21:06.503Z Starting verusd
+2026-10-16T22:21:06.505Z Failed to start verusd: spawn /tmp/claude-1000/-home-admin1-Desktop-verus-umbrel/6c56dea0-37c7-4d33-a44d-991ef99b8742/scratchpad/t2/bin/verusd ENOENT
+2026-10-16T22:21:21.507Z Starting verusd
+2026-10-16T22:21:21.510Z Failed to start verusd: spawn /tmp/claude-1000/-home-admin1-Desktop-verus-umbrel/6c56dea0-37c7-4d33-a44d-991ef99b8742/scratchpad/t2/bin/verusd ENOENT
+2026-10-16T22:21:36.513Z Starting verusd
+2026-10-16T22:21:36.515Z Failed to start verusd: spawn /tmp/claude-1000/-home-admin1-Desktop-verus-umbrel/6c56dea0-37c7-4d33-a44d-991ef99b8742/scratchpad/t2/bin/verusd ENOENT
+2026-10-16T22:21:51.520Z Starting verusd
+2026-10-16T22:21:51.523Z Failed to start verusd: spawn /tmp/claude-1000/-home-admin1-Desktop-verus-umbrel/6c56dea0-37c7-4d33-a44d-991ef99b8742/scratchpad/t2/bin/verusd ENOENT
+2026-10-16T22:22:06.528Z Starting verusd
+2026-10-16T22:22:06.530Z Failed to start verusd: spawn /tmp/claude-1000/-home-admin1-Desktop-verus-umbrel/6c56dea0-37c7-4d33-a44d-991ef99b8742/scratchpad/t2/bin/verusd ENOENT
+2026-10-16T22:22:21.536Z Starting verusd
+2026-10-16T22:22:29.993Z vDEX bootstrap failed (attempt 1): Method not found
+2026-10-16T22:22:31.266Z CHIPS bootstrap failed (attempt 1): Method not found
+2026-10-16T22:25:12.808Z SIGTERM received, stopping verusd
+2026-10-16T22:25:13.115Z verusd exited (code=0 signal=null)

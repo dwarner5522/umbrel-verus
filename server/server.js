@@ -603,10 +603,11 @@ const server = http.createServer(async (request, response) => {
 		// Switch a PBaaS chain or its merge mining on or off: {"enabled": true} or {"mine": true}
 		const chainPost = request.method === 'POST' && /^\/api\/chains\/([A-Za-z0-9]+)$/.exec(pathname)
 		// Download and install a fresh bootstrap of a PBaaS chain
-		const bootstrapPost = request.method === 'POST' && /^\/api\/chains\/([A-Za-z0-9]+)\/bootstrap$/.exec(pathname)
-		if (bootstrapPost) {
+		// or delete the blockchain of a chain that is switched off
+		const actionPost = request.method === 'POST' && /^\/api\/chains\/([A-Za-z0-9]+)\/(bootstrap|remove)$/.exec(pathname)
+		if (actionPost) {
 			if (!isSameOrigin(request)) return sendJson(response, 403, {error: 'Forbidden'})
-			const result = await chains.requestBootstrap(bootstrapPost[1])
+			const result = actionPost[2] === 'bootstrap' ? await chains.requestBootstrap(actionPost[1]) : await chains.removeData(actionPost[1])
 			if (result.error) return sendJson(response, result.status, {error: result.error})
 			chains.tick()
 			return sendJson(response, 200, {ok: true, chains: chains.list(), payoutAddress: chains.payoutAddress()})

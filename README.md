@@ -47,6 +47,12 @@ To keep a small device usable, the chain daemons:
 - have merge mining paused for 15 minutes when a daemon is found hashing on the CPU itself, which
   is what it does when it can't hand its blocks to the VRSC daemon.
 
+Before a chain starts, at least 1 GB of memory has to be free, and chains with a known need (CHIPS,
+measured at 11.9 GB while loading its block index) are refused on devices with less memory in total.
+A daemon that stops is restarted after 15 s, 1, 5 and 15 minutes and then left stopped after 5 failed
+starts; the reason (exit code, signal, or the last error in its `debug.log`) is shown with it.
+`POST /api/chains/<name>/remove` deletes a switched-off chain's blockchain, keeping its wallet and conf.
+
 A chain switched on without any blockchain data starts from a bootstrap, and the Bootstrap button
 loads a fresh one at any time. Archives come from bootstrap.verus.expert and are installed only if:
 their `.verusid` signature is from the `Oink bootstrap releases@` VerusID (its keys are looked up on

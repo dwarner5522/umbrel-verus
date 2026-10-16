@@ -178,6 +178,7 @@ function chainStatus(chain) {
 		}
 		return bootstrap.stage === 'installing' ? ['Installing bootstrap', 'Checking the download and moving it into place'] : ['Bootstrap', 'Checking the signature']
 	}
+	if (chain.phase === 'held') return ['Not running', chain.message || '']
 	if (chain.error) return ['Attention', chain.error]
 	if (chain.bootstrapPending) return ['Bootstrap queued', chain.message || '']
 	if (chain.phase !== 'running' || !chain.node) return [chain.phase === 'waiting' ? 'Waiting' : 'Starting', chain.message || '']
@@ -227,7 +228,14 @@ function renderChains(chains, payoutAddress) {
 			button.className = 'copy'
 			button.textContent = 'Bootstrap'
 			button.addEventListener('click', () => bootstrapChain(chain.name, button))
-			row.insertCell().append(button)
+			const remove = document.createElement('button')
+			remove.type = 'button'
+			remove.className = 'copy'
+			remove.textContent = 'Remove data'
+			remove.addEventListener('click', () => removeChainData(chain.name, remove))
+			const actions = row.insertCell()
+			actions.className = 'chain-actions'
+			actions.append(button, remove)
 		}
 		if (!chains.length) {
 			const cell = body.insertRow().insertCell()
@@ -261,7 +269,26 @@ function fillChainRow(row, chain) {
 	found.textContent = number.format(chain.foundCount)
 	run.firstChild.setAttribute('aria-checked', String(!!chain.enabled))
 	mine.firstChild.setAttribute('aria-checked', String(!!chain.mine))
-	action.firstChild.disabled = !!chain.bootstrap || chain.bootstrapPending
+	const [bootstrapButton, removeButton] = action.children
+	bootstrapButton.disabled = !!chain.bootstrap || chain.bootstrapPending
+	// only a chain that is switched off can have its blockchain deleted
+	removeButton.hidden = chain.enabled || !chain.hasData
+}
+
+async function removeChainData(name, button) {
+	const result = $('chains-result')
+	if (!confirm(`Delete the downloaded ${name} blockchain to free its disk space? Switching ${name} on again starts with a new bootstrap.`)) return
+	button.disabled = true
+	try {
+		const {chains, payoutAddress} = await post(`api/chains/${name}/remove`, {})
+		result.hidden = true
+		renderChains(chains, payoutAddress)
+	} catch (error) {
+		result.hidden = false
+		result.textContent = error.message
+	} finally {
+		button.disabled = false
+	}
 }
 
 async function bootstrapChain(name, button) {

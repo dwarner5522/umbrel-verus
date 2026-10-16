@@ -564,6 +564,13 @@ pre {
 	color: var(--muted);
 }
 
+/* long messages wrap instead of pushing the switches and buttons out of view */
+.chain-status {
+	min-width: 12rem;
+	max-width: 22rem;
+	white-space: normal;
+}
+
 #chains details {
 	margin-top: 16px;
 }
@@ -581,4 +588,12 @@ pre {
 .copy:disabled {
 	opacity: 0.4;
 	cursor: not-allowed;
+}
+
+.chain-actions {
+	white-space: nowrap;
+}
+
+.chain-actions .copy + .copy {
+	margin-left: 6px;
 }

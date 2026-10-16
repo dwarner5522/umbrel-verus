@@ -20,10 +20,18 @@ const VRSC_ID = 'i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV'
 const KNOWN_CHAINS = [
 	{name: 'vARRR', id: 'iExBJfZYK7KREDpuhj6PzZBzqMAKaFg7d2', idHex: 'e9e10955b7d16031e3d6f55d9c908a038e3ae47d', blockTime: 60},
 	{name: 'vDEX', id: 'iHog9UCTrn95qpUBFCZ7kKz7qWdMA8MQ6N', idHex: '53fe39eea8c06bba32f1a4e20db67e5524f0309d', blockTime: 60},
-	{name: 'CHIPS', id: 'iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP', idHex: 'f315367528394674d45277e369629605a1c3ce9f', blockTime: 10},
+	// CHIPS has a block every 10 seconds. Loading its block index from the October 2026 bootstrap took
+	// verusd 1.2.18 11.9 GB of memory (measured), and that grows with the chain.
+	{name: 'CHIPS', id: 'iJ3WZocnjG9ufv7GKUA4LijQno5gTMb7tP', idHex: 'f315367528394674d45277e369629605a1c3ce9f', blockTime: 10, memory: 13e9},
 ]
 
-const RESTART_DELAY_MS = 15_000
+// a daemon that keeps failing is started again later and later, then left stopped
+const RESTART_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 15 * 60_000]
+const MAX_FAILED_STARTS = 5
+// a daemon that ran this long before it stopped counts as having started fine
+const HEALTHY_RUN_MS = 30 * 60_000
+// a chain daemon is only started while the Umbrel has at least this much memory available
+const MIN_AVAILABLE_MEMORY = 1024 * 1024 * 1024
 const DISCOVERY_INTERVAL_MS = 10 * 60_000
 const MAX_FOUND = 100
 const SCAN_BLOCKS_PER_TICK = 10
@@ -164,6 +172,10 @@ function createChains(options) {
 			bootstrap: null,
 			bootstrapAbort: null,
 			held: false,
+			heldMessage: '',
+			failures: 0,
+			startedAt: 0,
+			logOffset: 0,
 			hashing: 0,
 			miningPausedUntil: 0,
 			notice: null,
@@ -250,6 +262,47 @@ function createChains(options) {
 
 	const dataDir = (chain) => path.join(pbaasDir, chain.idHex)
 
+	// MemAvailable (or MemTotal) from /proc/meminfo, in bytes; null where that can't be read
+	async function memory(field = 'MemAvailable') {
+		try {
+			const match = new RegExp(`^${field}:\\s+(\\d+) kB`, 'm').exec(await fsp.readFile('/proc/meminfo', 'utf8'))
+			return match ? Number(match[1]) * 1024 : null
+		} catch {
+			return null
+		}
+	}
+	const availableMemory = () => memory('MemAvailable')
+	const gb = (bytes) => (bytes / 1e9).toFixed(bytes < 10e9 ? 1 : 0)
+
+	// A chain known to need more memory than this Umbrel has is refused before anything is downloaded.
+	async function tooBig(chain) {
+		if (!chain.memory) return null
+		const total = await memory('MemTotal')
+		if (total === null || total >= chain.memory) return null
+		return `${chain.name} needs about ${gb(chain.memory)} GB of memory to load its blockchain, and this Umbrel has ${gb(total)} GB in total, so it can't run here.`
+	}
+
+	// The last line the chain wrote to its debug.log since it was started that reports a problem.
+	async function lastError(chain) {
+		let handle
+		try {
+			handle = await fsp.open(path.join(dataDir(chain), 'debug.log'), 'r')
+			const {size} = await handle.stat()
+			const from = Math.max(chain.logOffset, size - 64 * 1024)
+			if (size <= from) return ''
+			const buffer = Buffer.alloc(size - from)
+			await handle.read(buffer, 0, buffer.length, from)
+			const lines = buffer.toString('utf8').split('\n')
+			for (let i = lines.length - 1; i >= 0; i--) {
+				if (/error|exception|assert|corrupt|failed|cannot|unable/i.test(lines[i])) return lines[i].replace(/^\S+ \S+ /, '').trim().slice(0, 300)
+			}
+		} catch {
+		} finally {
+			await handle?.close()
+		}
+		return ''
+	}
+
 	async function readRpcTarget(chain) {
 		try {
 			const conf = parseConf(await fsp.readFile(path.join(dataDir(chain), `${chain.idHex}.conf`), 'utf8'))
@@ -273,6 +326,13 @@ function createChains(options) {
 
 		log(`Starting verusd for ${chain.name}`)
 		lastStartAt = Date.now()
+		chain.startedAt = Date.now()
+		// only what this run writes to debug.log is searched for the reason it stopped
+		try {
+			chain.logOffset = fs.statSync(path.join(dataDir(chain), 'debug.log')).size
+		} catch {
+			chain.logOffset = 0
+		}
 		const proc = spawn(...lowPriority(verusdBin, [`-chain=${chain.name}`, '-showmetrics=0', ...extraArgs]), {
 			env: {...process.env, HOME: home},
 			stdio: ['ignore', 'pipe', 'pipe'],
@@ -286,7 +346,7 @@ function createChains(options) {
 			})
 		}
 
-		const ended = (reason, failed) => {
+		const ended = async (reason, failure) => {
 			if (chain.proc !== proc) return
 			log(`verusd for ${chain.name} ${reason}`)
 			chain.proc = null
@@ -300,12 +360,29 @@ function createChains(options) {
 			}
 			chain.phase = 'stopped'
 			chain.message = 'Stopped. Restarting…'
-			if (failed) chain.error = `The ${chain.name} daemon stopped unexpectedly${chain.lastOutput ? `: ${chain.lastOutput}` : '.'}`
-			chain.restartAt = Date.now() + RESTART_DELAY_MS
+			if (Date.now() - chain.startedAt > HEALTHY_RUN_MS) chain.failures = 0
+			chain.failures++
+			chain.restartAt = Date.now() + RESTART_DELAYS_MS[Math.min(chain.failures - 1, RESTART_DELAYS_MS.length - 1)]
+			const detail = await lastError(chain)
+			chain.error = `The ${chain.name} daemon ${failure}${detail ? ` Last error in its log: ${detail}` : ''}`
+			if (chain.failures >= MAX_FAILED_STARTS) {
+				chain.held = true
+				chain.heldMessage = `${chain.error} Stopped after ${chain.failures} failed starts; switch the chain off and on again to retry.`
+				log(`${chain.name}: ${chain.heldMessage}`)
+			}
+		}
+		const describe = (code, signal) => {
+			// the kernel's out-of-memory killer and Docker's memory limit both use SIGKILL
+			if (signal === 'SIGKILL') return 'was killed by the system (SIGKILL), most likely because the Umbrel ran out of memory.'
+			if (signal) return `crashed (${signal}).`
+			return `stopped with exit code ${code}.`
 		}
 		// 'exit' is not emitted when the binary can't be spawned at all
-		proc.on('error', (error) => ended(`could not be started: ${error.message}`, true))
-		proc.on('exit', (code, signal) => ended(`exited (code=${code} signal=${signal})`, code !== 0))
+		proc.on('error', (error) => ended(`could not be started: ${error.message}`, `could not be started: ${error.message}.`))
+		proc.on('exit', (code, signal) => {
+			if (code === 0 && !signal && (stopping || !chain.enabled || chain.phase === 'stopping')) return ended('exited', '')
+			ended(`exited (code=${code} signal=${signal})`, describe(code, signal))
+		})
 	}
 
 	function stop(chain) {
@@ -401,6 +478,7 @@ function createChains(options) {
 			chain.phase = 'running'
 			chain.message = synced ? 'Synchronized' : 'Synchronizing'
 			chain.error = null
+			if (synced) chain.failures = 0
 			if (synced && !chain.everSynced) {
 				chain.everSynced = true
 				save()
@@ -479,6 +557,7 @@ function createChains(options) {
 				await bootstrap.clearMarker(dir)
 				chain.bootstrapRequested = false
 				chain.held = true
+				chain.heldMessage = `${chain.error} Press Bootstrap to try again, or switch the chain off.`
 			} else {
 				chain.restartAt = Date.now() + BOOTSTRAP_RETRY_MS
 			}
@@ -487,6 +566,12 @@ function createChains(options) {
 			chain.bootstrapAbort = null
 			chain.bootstrap = null
 		}
+	}
+
+	// left stopped until the user does something about it
+	function held(chain) {
+		chain.phase = 'held'
+		chain.message = chain.heldMessage
 	}
 
 	function waiting(chain, message) {
@@ -503,7 +588,7 @@ function createChains(options) {
 		if (chain.bootstrapping) return
 		if (chain.held) {
 			if (chain.proc && chain.phase !== 'stopping') stop(chain)
-			return waiting(chain, 'Stopped. Press Bootstrap to try again, or switch the chain off.')
+			return held(chain)
 		}
 		if (chain.bootstrapRequested) {
 			if (chain.proc) {
@@ -518,6 +603,14 @@ function createChains(options) {
 			runBootstrap(chain, rootState).catch((error) => log(`${chain.name} bootstrap:`, error.message))
 			return
 		}
+		if (!chain.proc && !chain.bootstrapRequested) {
+			const refusal = await tooBig(chain)
+			if (refusal) {
+				chain.held = true
+				chain.heldMessage = refusal
+				return held(chain)
+			}
+		}
 		if (!chain.proc) {
 			// the daemon reads its chain definition from the VRSC daemon the first time it starts
 			if (!rootState.synced) return waiting(chain, 'Waiting for the VRSC node to finish syncing')
@@ -525,6 +618,11 @@ function createChains(options) {
 			if (other) return waiting(chain, `Waiting for ${other.name} to finish syncing`)
 			if (Date.now() < chain.restartAt) return
 			if (Date.now() - lastStartAt < START_SPACING_MS) return waiting(chain, 'Starting shortly')
+			const available = await availableMemory()
+			const needed = Math.max(MIN_AVAILABLE_MEMORY, chain.memory || 0)
+			if (available !== null && available < needed) {
+				return waiting(chain, `Waiting for ${gb(needed)} GB of free memory (${gb(available)} GB available)`)
+			}
 			await fsp.mkdir(pbaasDir, {recursive: true})
 			start(chain)
 			return
@@ -556,6 +654,7 @@ function createChains(options) {
 			message: chain.enabled || chain.proc ? chain.message : 'Off',
 			error: chain.enabled ? chain.error || chain.notice : null,
 			bootstrap: chain.bootstrap,
+			hasData: bootstrap.hasChainData(dataDir(chain)),
 			bootstrapPending: chain.bootstrapRequested && !chain.bootstrapping,
 			node: chain.node,
 			mining: chain.mining,
@@ -568,6 +667,7 @@ function createChains(options) {
 	// first block is what takes the most CPU and time.
 	async function switchedOn(chain) {
 		chain.held = false
+		chain.failures = 0
 		chain.error = null
 		chain.restartAt = 0
 		const dir = dataDir(chain)
@@ -596,6 +696,10 @@ function createChains(options) {
 			return {status: 409, error: 'Set a payout address first. Merge-mined rewards need somewhere to go.'}
 		}
 		const wasEnabled = chain.enabled
+		if (!wasEnabled && (patch.enabled === true || patch.mine === true)) {
+			const refusal = await tooBig(chain)
+			if (refusal) return {status: 409, error: refusal}
+		}
 		if (patch.enabled !== undefined) chain.enabled = patch.enabled
 		if (patch.mine !== undefined) chain.mine = patch.mine
 		// merge mining needs the chain's own daemon
@@ -607,13 +711,38 @@ function createChains(options) {
 		return {status: 200}
 	}
 
+	// Delete a switched-off chain's blockchain to free the disk space. Its wallet and conf file are kept.
+	async function removeData(name) {
+		const chain = chains.get(name)
+		if (!chain) return {status: 404, error: 'Unknown chain'}
+		if (chain.enabled || chain.proc || chain.bootstrapping) return {status: 409, error: `Switch ${chain.name} off first.`}
+		const dir = dataDir(chain)
+		let entries = []
+		try {
+			entries = await fsp.readdir(dir)
+		} catch {}
+		for (const entry of entries) {
+			if (entry === 'wallet.dat' || entry.endsWith('.conf')) continue
+			await fsp.rm(path.join(dir, entry), {recursive: true, force: true})
+		}
+		chain.everSynced = false
+		chain.held = false
+		chain.error = null
+		save()
+		log(`Removed the ${chain.name} blockchain`)
+		return {status: 200}
+	}
+
 	// Replace the chain's blockchain with a fresh bootstrap. The chain is switched on for it.
 	async function requestBootstrap(name) {
 		const chain = chains.get(name)
 		if (!chain) return {status: 404, error: 'Unknown chain'}
 		if (chain.bootstrapping) return {status: 409, error: 'A bootstrap is already being downloaded.'}
+		const refusal = await tooBig(chain)
+		if (refusal) return {status: 409, error: refusal}
 		chain.enabled = true
 		chain.held = false
+		chain.failures = 0
 		chain.error = null
 		chain.restartAt = 0
 		chain.bootstrapRequested = true
@@ -658,7 +787,7 @@ function createChains(options) {
 		await Promise.all([...chains.values()].map(stop))
 	}
 
-	return {load, tick, list, setChain, requestBootstrap, setPayout, logs, stopAll, payoutAddress: () => payoutAddress}
+	return {load, tick, list, setChain, requestBootstrap, removeData, setPayout, logs, stopAll, payoutAddress: () => payoutAddress}
 }
 
 module.exports = {createChains, writeRootConf, isPayoutAddress, parseConf, KNOWN_CHAINS}
